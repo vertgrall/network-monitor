@@ -2,6 +2,7 @@ module NetworkMonitor.Menu.Core
   ( MenuLine (..)
   , MenuFooter (..)
   , runMenuPage
+  , runMenuPageWithAliases
   , pause
   , promptLine
   , promptDefault
@@ -9,9 +10,21 @@ module NetworkMonitor.Menu.Core
   , ifaceLabel
   , onOff
   , persistSession
+  , renderBreadcrumb
+  , normalizeChoice
   ) where
 
+import Data.Char (isSpace, toLower)
+import Data.List (dropWhileEnd)
+import Data.List (intercalate)
 import NetworkMonitor.Art
+  ( clearScreen
+  , renderError
+  , renderHeader
+  , renderPanel
+  , renderPrompt
+  , useColor
+  )
 import NetworkMonitor.Session (Session (..), saveSession)
 import System.IO (hFlush, stdout)
 
@@ -27,18 +40,34 @@ data MenuFooter
 
 runMenuPage ::
   String ->
+  [String] ->
   Session ->
   [String] ->
   [MenuLine] ->
   MenuFooter ->
   Maybe String ->
   IO Session
-runMenuPage title session summaryLines menuLines footer mErr = go session mErr
+runMenuPage title breadcrumbs session summaryLines menuLines footer mErr =
+  runMenuPageWithAliases title breadcrumbs session summaryLines menuLines footer mErr []
+
+runMenuPageWithAliases ::
+  String ->
+  [String] ->
+  Session ->
+  [String] ->
+  [MenuLine] ->
+  MenuFooter ->
+  Maybe String ->
+  [(String, String)] ->
+  IO Session
+runMenuPageWithAliases title breadcrumbs session summaryLines menuLines footer mErr aliases =
+  go session mErr
   where
     go s mErr' = do
-      drawPage title s summaryLines menuLines footer mErr'
+      drawPage title breadcrumbs s summaryLines menuLines footer mErr'
       let (maxChoice, _) = numberedChoices menuLines
-      choice <- promptLine ("Select option [0-" ++ show maxChoice ++ "]: ")
+      choiceRaw <- promptLine ("Select option [0-" ++ show maxChoice ++ "]: ")
+      let choice = normalizeChoice choiceRaw aliases
       case choice of
         "0" -> pure s
         "" -> go s (Just "Please enter a selection.")
@@ -49,15 +78,17 @@ runMenuPage title session summaryLines menuLines footer mErr = go session mErr
 
 drawPage ::
   String ->
+  [String] ->
   Session ->
   [String] ->
   [MenuLine] ->
   MenuFooter ->
   Maybe String ->
   IO ()
-drawPage title session summaryLines menuLines footer mErr = do
+drawPage title breadcrumbs session summaryLines menuLines footer mErr = do
   clearScreen
   renderHeader
+  renderBreadcrumb (sessionTheme session) breadcrumbs
   let footerLabel =
         case footer of
           FooterBack -> "Back"
@@ -95,6 +126,16 @@ lookupChoice :: String -> [MenuLine] -> Maybe (Session -> IO Session)
 lookupChoice key lines =
   lookup key (snd (numberedChoices lines))
 
+normalizeChoice :: String -> [(String, String)] -> String
+normalizeChoice raw aliases =
+  let trimmed = dropWhile (== ' ') (dropWhileEnd isSpace raw)
+      lower = map toLower trimmed
+   in case lookup lower aliases of
+        Just n -> n
+        Nothing -> trimmed
+  where
+    isSpace c = c == ' ' || c == '\t'
+
 pause :: IO ()
 pause = do
   renderPrompt "  Press Enter to continue..."
@@ -128,3 +169,17 @@ onOff False = "off"
 
 persistSession :: Session -> IO Session
 persistSession s = saveSession s >> pure s
+
+renderBreadcrumb :: String -> [String] -> IO ()
+renderBreadcrumb theme parts =
+  if null parts
+    then pure ()
+    else do
+      colorOn <- useColor
+      let line = "  " ++ intercalate " › " parts
+      if colorOn
+        then case theme of
+          "cyber" -> putStrLn ("\ESC[1m\ESC[95m" ++ line ++ "\ESC[0m")
+          "minimal" -> putStrLn line
+          _ -> putStrLn ("\ESC[1m\ESC[96m" ++ line ++ "\ESC[0m")
+        else putStrLn line

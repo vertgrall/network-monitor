@@ -30,6 +30,8 @@ showHelp = do
     , "    network-monitor flow"
     , "    network-monitor router"
     , "    network-monitor inbound"
+    , "    network-monitor health"
+    , "    network-monitor lanmap"
     , "    network-monitor --help"
     , ""
     , "  Config: ~/.config/new-tower/session.conf"

@@ -17,10 +17,16 @@ executable network-monitor
                       NetworkMonitor.Art
                       NetworkMonitor.CLI
                       NetworkMonitor.DNS
+                      NetworkMonitor.Export
                       NetworkMonitor.Flow
                       NetworkMonitor.Format
+                      NetworkMonitor.Health
+                      NetworkMonitor.History
+                      NetworkMonitor.HostIntel
                       NetworkMonitor.Hosts
+                      NetworkMonitor.Inbound
                       NetworkMonitor.Intel
+                      NetworkMonitor.LanMap
                       NetworkMonitor.Listen
                       NetworkMonitor.Log
                       NetworkMonitor.Menu
@@ -29,6 +35,7 @@ executable network-monitor
                       NetworkMonitor.Menu.Core
                       NetworkMonitor.Menu.Diagnostics
                       NetworkMonitor.Menu.Help
+                      NetworkMonitor.Menu.HubStatus
                       NetworkMonitor.Menu.LiveMonitor
                       NetworkMonitor.Menu.MainPage
                       NetworkMonitor.Menu.MissionReports
@@ -36,12 +43,15 @@ executable network-monitor
                       NetworkMonitor.Menu.Settings
                       NetworkMonitor.Mission
                       NetworkMonitor.NetView
+                      NetworkMonitor.Notify
                       NetworkMonitor.Probe
+                      NetworkMonitor.Recent
                       NetworkMonitor.Report
                       NetworkMonitor.Router
                       NetworkMonitor.Services
                       NetworkMonitor.Session
                       NetworkMonitor.Stats
+                      NetworkMonitor.Timeline
                       NetworkMonitor.Trace
   ghc-options:        -Wall
   build-depends:

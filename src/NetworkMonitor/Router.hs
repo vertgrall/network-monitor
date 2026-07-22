@@ -5,6 +5,7 @@ module NetworkMonitor.Router
   , wanRates
   , renderRouterPanel
   , snmpAvailable
+  , testSnmpConnection
   ) where
 
 import Data.Char (isDigit, isSpace, toLower)
@@ -32,6 +33,27 @@ snmpAvailable :: IO Bool
 snmpAvailable = do
   (code, _, _) <- readProcessWithExitCode "snmpget" ["-V"] ""
   pure (code == ExitSuccess)
+
+testSnmpConnection :: String -> String -> Maybe String -> IO (Either String String)
+testSnmpConnection host community hint = do
+  ok <- snmpAvailable
+  if not ok
+    then pure (Left "SNMP tools not found (install net-snmp).")
+    else do
+      result <- discoverWanInterface host community hint
+      pure $
+        case result of
+          Left err -> Left err
+          Right wan ->
+            Right
+              ( "SNMP OK at "
+                  ++ host
+                  ++ " — WAN interface "
+                  ++ wanDescr wan
+                  ++ " (#"
+                  ++ show (wanIndex wan)
+                  ++ ")"
+              )
 
 discoverWanInterface :: String -> String -> Maybe String -> IO (Either String WanIface)
 discoverWanInterface host community hint = do

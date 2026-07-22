@@ -1,7 +1,7 @@
 module NetworkMonitor.Menu.RouterPage (routerPage) where
 
 import NetworkMonitor.CLI (Command (Router))
-import NetworkMonitor.Menu.Actions as Act (runLiveAction)
+import NetworkMonitor.Menu.Actions as Act (runLiveAction, runTestSnmp)
 import NetworkMonitor.Menu.Core
   ( MenuLine (..)
   , MenuFooter (FooterBack)
@@ -15,6 +15,7 @@ routerPage :: Session -> IO Session
 routerPage session =
   runMenuPage
     "ROUTER & WAN"
+    ["Main", "Router & WAN"]
     session
     pageSummary
     (pageLines session)
@@ -26,6 +27,7 @@ pageLines session =
   [ MenuSection "Run"
   , MenuOpt "Live WAN traffic (SNMP)" $ \s ->
       Act.runLiveAction s Router "Router monitor stopped."
+  , MenuOpt "Test SNMP connection" Act.runTestSnmp
   , MenuSection "SNMP settings"
   , MenuOpt ("Router IP (" ++ routerHostLabel (sessionRouterHost session) ++ ")") editRouterHost
   , MenuOpt ("Community (" ++ sessionSnmpCommunity session ++ ")") editSnmpCommunity

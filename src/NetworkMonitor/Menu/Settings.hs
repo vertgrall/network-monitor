@@ -11,8 +11,10 @@ import NetworkMonitor.Menu.Core
   )
 import NetworkMonitor.Session
   ( Session (..)
+  , defaultSession
   , parseCommaList
   , parseInterfaceInput
+  , saveSession
   , showCommaList
   , showInterface
   )
@@ -21,6 +23,7 @@ settingsPage :: Session -> IO Session
 settingsPage session =
   runMenuPage
     "SETTINGS"
+    ["Main", "Settings"]
     session
     pageSummary
     (pageLines session)
@@ -35,17 +38,23 @@ pageLines session =
   , MenuOpt ("Count (" ++ show (sessionCount session) ++ ")") editCount
   , MenuOpt ("Connection state (" ++ sessionState session ++ ")") editState
   , MenuOpt ("Limit (" ++ show (sessionLimit session) ++ ")") editLimit
+  , MenuSection "Display"
+  , MenuOpt ("Theme (" ++ sessionTheme session ++ ")") editTheme
   , MenuSection "Alerts & logging"
   , MenuOpt ("Favorites (" ++ showCommaList (sessionFavorites session) ++ ")") editFavorites
   , MenuOpt ("Blocklist (" ++ showCommaList (sessionBlocklist session) ++ ")") editBlocklist
   , MenuOpt ("Emit alert (" ++ show (sessionEmitAlert session) ++ " B/s)") editEmitAlert
   , MenuOpt ("Logging [" ++ onOff (sessionLogging session) ++ "]") toggleLogging
+  , MenuOpt ("Notify on alerts [" ++ onOff (sessionNotifyAlerts session) ++ "]") toggleNotify
+  , MenuSection "Maintenance"
+  , MenuOpt "Reset to defaults" resetDefaults
+  , MenuOpt "Save session (writes config now)" saveNow
   ]
 
 pageSummary :: [String]
 pageSummary =
   [ "  Global defaults for live tools and CLI."
-  , "  Router SNMP settings live under Router & WAN menu."
+  , "  Themes: default, cyber, minimal (breadcrumb colors)."
   , ""
   ]
 
@@ -83,6 +92,16 @@ editLimit s = do
     [(n, _)] | n > 0 -> persistSession s {sessionLimit = n}
     _ -> pure s
 
+editTheme :: Session -> IO Session
+editTheme s = do
+  val <- promptDefault "Theme [default/cyber/minimal]: " (sessionTheme s)
+  let theme =
+        case dropWhile (== ' ') val of
+          "cyber" -> "cyber"
+          "minimal" -> "minimal"
+          _ -> "default"
+  persistSession s {sessionTheme = theme}
+
 editFavorites :: Session -> IO Session
 editFavorites s = do
   val <- promptDefault ("Favorite hosts [" ++ showCommaList (sessionFavorites s) ++ "]: ") (showCommaList (sessionFavorites s))
@@ -102,3 +121,12 @@ editEmitAlert s = do
 
 toggleLogging :: Session -> IO Session
 toggleLogging s = persistSession s {sessionLogging = not (sessionLogging s)}
+
+toggleNotify :: Session -> IO Session
+toggleNotify s = persistSession s {sessionNotifyAlerts = not (sessionNotifyAlerts s)}
+
+resetDefaults :: Session -> IO Session
+resetDefaults _ = persistSession defaultSession
+
+saveNow :: Session -> IO Session
+saveNow s = saveSession s >> pure s

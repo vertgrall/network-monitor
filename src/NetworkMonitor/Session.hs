@@ -34,6 +34,10 @@ data Session = Session
   , sessionSnmpWanIf :: !String
   , sessionFlowResolveDns :: !Bool
   , sessionFlowShowApps :: !Bool
+  , sessionTheme :: !String
+  , sessionFlowInboundOnly :: !Bool
+  , sessionGeoLookup :: !Bool
+  , sessionNotifyAlerts :: !Bool
   }
   deriving (Eq, Show)
 
@@ -54,6 +58,10 @@ defaultSession =
     , sessionSnmpWanIf = ""
     , sessionFlowResolveDns = True
     , sessionFlowShowApps = True
+    , sessionTheme = "default"
+    , sessionFlowInboundOnly = False
+    , sessionGeoLookup = True
+    , sessionNotifyAlerts = False
     }
 
 sessionConfigPath :: IO FilePath
@@ -98,6 +106,10 @@ saveSession s = do
     , "snmp_wan_if=" ++ sessionSnmpWanIf s
     , "flow_resolve_dns=" ++ if sessionFlowResolveDns s then "1" else "0"
     , "flow_show_apps=" ++ if sessionFlowShowApps s then "1" else "0"
+    , "theme=" ++ sessionTheme s
+    , "flow_inbound_only=" ++ if sessionFlowInboundOnly s then "1" else "0"
+    , "geo_lookup=" ++ if sessionGeoLookup s then "1" else "0"
+    , "notify_alerts=" ++ if sessionNotifyAlerts s then "1" else "0"
     ]
   hClose h
 
@@ -148,6 +160,10 @@ parseConfig content =
                     "snmp_wan_if" -> s {sessionSnmpWanIf = v}
                     "flow_resolve_dns" -> s {sessionFlowResolveDns = v == "1" || v == "true" || v == "yes"}
                     "flow_show_apps" -> s {sessionFlowShowApps = v == "1" || v == "true" || v == "yes"}
+                    "theme" -> s {sessionTheme = if null v then sessionTheme s else v}
+                    "flow_inbound_only" -> s {sessionFlowInboundOnly = v == "1" || v == "true" || v == "yes"}
+                    "geo_lookup" -> s {sessionGeoLookup = v == "1" || v == "true" || v == "yes"}
+                    "notify_alerts" -> s {sessionNotifyAlerts = v == "1" || v == "true" || v == "yes"}
                     _ -> s
             _ -> s
 

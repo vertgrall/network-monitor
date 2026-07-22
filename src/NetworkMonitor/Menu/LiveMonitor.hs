@@ -20,6 +20,7 @@ liveMonitorPage :: Session -> IO Session
 liveMonitorPage session =
   runMenuPage
     "LIVE MONITOR"
+    ["Main", "Live Monitor"]
     session
     pageSummary
     (pageLines session)

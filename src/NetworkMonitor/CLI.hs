@@ -22,6 +22,10 @@ module NetworkMonitor.CLI
   , runMultiPing
   , runRouter
   , runInbound
+  , runInboundLive
+  , runHealth
+  , runLanMap
+  , mergeSessionOptions
   ) where
 
 import Control.Concurrent (threadDelay)
@@ -44,6 +48,13 @@ import NetworkMonitor.Flow
   , renderFlowPanel
   )
 import qualified NetworkMonitor.Flow as FlowLib
+import NetworkMonitor.Health (computeHealth, renderHealthLines)
+import NetworkMonitor.History (recordMetric)
+import NetworkMonitor.HostIntel (formatGeoShort, lookupGeo)
+import NetworkMonitor.Inbound (filterInboundFlows, renderInboundPanel)
+import NetworkMonitor.LanMap (readLanDevices, renderLanMapLines)
+import NetworkMonitor.Notify (notifyUser)
+import NetworkMonitor.Timeline (appendTimeline)
 import NetworkMonitor.Format
 import NetworkMonitor.Hosts (topRemoteHosts)
 import NetworkMonitor.Intel (gatherIntel, renderIntelLines)
@@ -61,6 +72,7 @@ import NetworkMonitor.Router
   , snmpAvailable
   , wanRates
   )
+import NetworkMonitor.Session (Session (..))
 import NetworkMonitor.Stats
 import NetworkMonitor.Trace (traceRoute)
 import Options.Applicative
@@ -84,6 +96,8 @@ data Command
   | MultiPing
   | Router
   | Inbound
+  | Health
+  | LanMap
   | Ping
   | TopHosts
   | PortCheck
@@ -109,8 +123,31 @@ data Options = Options
   , optSnmpWanIf :: !String
   , optFlowResolveDns :: !Bool
   , optFlowShowApps :: !Bool
+  , optFlowInboundOnly :: !Bool
+  , optGeoLookup :: !Bool
+  , optNotifyAlerts :: !Bool
   }
   deriving (Eq, Show)
+
+mergeSessionOptions :: Session -> Options -> Options
+mergeSessionOptions s o =
+  o { optFlowResolveDns = sessionFlowResolveDns s
+    , optFlowShowApps = sessionFlowShowApps s
+    , optFlowInboundOnly = sessionFlowInboundOnly s
+    , optGeoLookup = sessionGeoLookup s
+    , optNotifyAlerts = sessionNotifyAlerts s
+    , optRouterHost = pickEmpty (optRouterHost o) (sessionRouterHost s)
+    , optSnmpWanIf = pickEmpty (optSnmpWanIf o) (sessionSnmpWanIf s)
+    , optSnmpCommunity =
+        if null (sessionSnmpCommunity s)
+          then optSnmpCommunity o
+          else sessionSnmpCommunity s
+    , optInterface = if null (optInterface o) then sessionInterface s else optInterface o
+    , optFavorites = if null (optFavorites o) then sessionFavorites s else optFavorites o
+    , optBlocklist = if null (optBlocklist o) then sessionBlocklist s else optBlocklist o
+    }
+  where
+    pickEmpty cli sess = if null cli then sess else cli
 
 parseOptions :: IO Options
 parseOptions =
@@ -144,6 +181,9 @@ options =
     <*> snmpWanIfOption
     <*> pure True
     <*> pure True
+    <*> pure False
+    <*> pure True
+    <*> pure False
 
 commandParser :: Parser Command
 commandParser =
@@ -217,6 +257,12 @@ commandParser =
         <> command
           "inbound"
           ( info (pure Inbound) (progDesc "Remote hosts connected to your listening ports"))
+        <> command
+          "health"
+          ( info (pure Health) (progDesc "Network health score snapshot"))
+        <> command
+          "lanmap"
+          ( info (pure LanMap) (progDesc "LAN device map from ARP/neighbor table"))
         <> command
           "ping"
           ( info (pure Ping) (progDesc "Ping a host and show latency stats"))
@@ -412,6 +458,8 @@ runCommand opts =
     MultiPing -> runMultiPing opts
     Router -> runRouter opts
     Inbound -> runInbound opts
+    Health -> runHealth opts
+    LanMap -> runLanMap opts
     Ping -> runPing opts
     TopHosts -> runTopHosts opts
     PortCheck -> runPortCheck opts
@@ -580,13 +628,18 @@ runNetView opts =
 runFlow :: Options -> IO ()
 runFlow opts =
   bracketTerminal $ do
-    loop Nothing Nothing 0
+    gateway <- defaultGateway
+    loop Nothing Nothing 0 gateway False
   where
-    loop prevTotals prevFlows n = do
+    loop prevTotals prevFlows n gateway prevStorm = do
       threadDelay (round (optInterval opts * 1000000))
       colorOn <- useColor
-      flows <- readFlows
-      let (emits, totals) =
+      flowsRaw <- readFlows
+      let flows =
+            if optFlowInboundOnly opts
+              then filterInboundFlows (optState opts) (optLimit opts) flowsRaw
+              else flowsRaw
+          (emits, totals) =
             computeHostEmits
               (optInterval opts)
               (optState opts)
@@ -608,7 +661,10 @@ runFlow opts =
       dnsLines <-
         if optFlowResolveDns opts
           then mapM enrichDns (take 5 emits)
-          else pure []
+          else
+            if optGeoLookup opts
+              then mapM enrichGeo (take 5 emits)
+              else pure []
       let body =
             renderFlowPanel n colorOn (optInterval opts) emits flows
               ++ renderFlowExtras alerts apps dnsLines
@@ -616,6 +672,9 @@ runFlow opts =
       renderHeaderAnimated n
       renderLiveBanner n (optInterval opts) (n + 1) inStorm
       renderPanelStorm inStorm n "TRAFFIC FLOW MONITOR" body
+      mPing <- sampleGatewayMs gateway
+      conns <- length <$> readConnections
+      recordMetric totalEmit conns mPing
       when (optLogging opts) $
         appendSessionLog
           ( "flow refresh "
@@ -625,8 +684,11 @@ runFlow opts =
               ++ "B/s hosts="
               ++ show (length emits)
           )
+      when (optNotifyAlerts opts && inStorm && not prevStorm) $
+        notifyUser "NT Sentinel" ("High emit rate: " ++ show (round totalEmit) ++ " B/s")
+      when (inStorm && not prevStorm) $ appendTimeline "emit storm detected"
       when (optCount opts > 0 && n + 1 >= optCount opts) exitSuccess
-      loop (Just totals) (Just flows) (n + 1)
+      loop (Just totals) (Just flows) (n + 1) gateway inStorm
 
     enrichDns e = do
       label <- lookupHostLabel (emitHost e)
@@ -636,6 +698,21 @@ runFlow opts =
             ++ " -> "
             ++ take 40 label
         )
+
+    enrichGeo e = do
+      geo <- lookupGeo (emitHost e)
+      pure
+        ( "  "
+            ++ padR 18 (emitHost e)
+            ++ " -> "
+            ++ take 40 (maybe "?" formatGeoShort geo)
+        )
+
+    sampleGatewayMs :: Maybe String -> IO (Maybe Double)
+    sampleGatewayMs Nothing = pure Nothing
+    sampleGatewayMs (Just host) = do
+      result <- pingHost host 1
+      pure (either (const Nothing) (Just . pingAvgMs) result)
 
 runConnections :: Options -> IO ()
 runConnections opts = do
@@ -1043,28 +1120,13 @@ resolveRouterHost opts =
 runInbound :: Options -> IO ()
 runInbound opts = do
   flows <- FlowLib.readFlows
-  let inbound =
-        take (optLimit opts) $
-          filter isInboundFlow $
-            filter ((== optState opts) . FlowLib.flowState) flows
+  let inbound = filterInboundFlows (optState opts) (optLimit opts) flows
   clearScreen
   renderHeader
-  rows <- mapM (renderInboundRow opts) inbound
+  rows <- renderInboundPanel (optFlowResolveDns opts) (optGeoLookup opts) inbound
   let body =
-        [ ""
-        , "  Remote hosts with connections TO your machine (inbound):"
-        , ""
-        , "  "
-            ++ padR 18 "REMOTE"
-            ++ padR 22 "HOSTNAME"
-            ++ padL 6 "PORT"
-            ++ padR 14 "LOCAL"
-            ++ padR 12 "PROCESS"
-        ]
-          ++ if null rows
-            then ["  (no inbound " ++ optState opts ++ " connections detected)"]
-            else rows
-          ++ [""]
+        [ "  Remote hosts with connections TO your machine (inbound):" ]
+          ++ rows
   renderPanel "INBOUND WATCHERS" body
   putStrLn $
     "Showing "
@@ -1073,28 +1135,54 @@ runInbound opts = do
       ++ optState opts
       ++ " connection(s)."
 
-isInboundFlow :: FlowLib.Flow -> Bool
-isInboundFlow f =
-  FlowLib.flowPort f >= 1024
-    && ( FlowLib.flowLocalPort f <= 1024
-           || FlowLib.flowLocalPort f `elem` commonLocalServicePorts
-       )
+runInboundLive :: Options -> IO ()
+runInboundLive opts =
+  bracketTerminal $ loop 0
   where
-    commonLocalServicePorts = [3000, 3001, 4000, 5000, 5173, 5432, 5900, 6379, 8000, 8080, 8443, 8888]
+    loop n = do
+      threadDelay (round (optInterval opts * 1000000))
+      flows <- FlowLib.readFlows
+      let inbound = filterInboundFlows (optState opts) (optLimit opts) flows
+      rows <- renderInboundPanel (optFlowResolveDns opts) (optGeoLookup opts) inbound
+      let body =
+            [ "  Live inbound watchers — remote hosts on your listening ports" ]
+              ++ rows
+      clearScreen
+      renderHeaderAnimated n
+      renderLiveBanner n (optInterval opts) (n + 1) False
+      renderPanel "INBOUND WATCHERS (LIVE)" body
+      when (optLogging opts) $
+        appendSessionLog ("inbound live refresh " ++ show (n + 1) ++ " rows=" ++ show (length inbound))
+      when (optCount opts > 0 && n + 1 >= optCount opts) exitSuccess
+      loop (n + 1)
 
-renderInboundRow :: Options -> FlowLib.Flow -> IO String
-renderInboundRow opts f = do
-  hostLabel <-
-    if optFlowResolveDns opts
-      then lookupHostLabel (FlowLib.flowHost f)
-      else pure (FlowLib.flowHost f)
-  pure $
-    "  "
-      ++ padR 18 (FlowLib.flowHost f)
-      ++ padR 22 (take 22 hostLabel)
-      ++ padL 6 (show (FlowLib.flowPort f))
-      ++ padR 14 (":" ++ show (FlowLib.flowLocalPort f))
-      ++ padR 12 (take 12 (maybe "?" id (FlowLib.flowProcess f)))
+runHealth :: Options -> IO ()
+runHealth _opts = do
+  gateway <- defaultGateway
+  pingInfo <-
+    case gateway of
+      Nothing -> pure (Nothing, Nothing)
+      Just host -> do
+        result <- pingHost host 4
+        pure $
+          case result of
+            Right r -> (Just (pingAvgMs r), Just (pingLossPct r))
+            Left _ -> (Nothing, Nothing)
+  conns <- readConnections
+  stats <- readInterfaceStats
+  let ifaceErrors = sum [fromIntegral (inErrors s + outErrors s) | s <- stats]
+      report = computeHealth (fst pingInfo) (snd pingInfo) (length conns) ifaceErrors
+  clearScreen
+  renderHeader
+  renderPanel "NETWORK HEALTH" (renderHealthLines report)
+
+runLanMap :: Options -> IO ()
+runLanMap _opts = do
+  devs <- readLanDevices
+  clearScreen
+  renderHeader
+  renderPanel "LAN MAP" (renderLanMapLines devs)
+  putStrLn ("Devices found: " ++ show (length devs))
 
 filterByInterface :: Options -> [InterfaceStats] -> [InterfaceStats]
 filterByInterface opts stats =

@@ -7,10 +7,11 @@ import NetworkMonitor.Menu.Core
   , MenuFooter (FooterExit)
   , configPathHint
   , ifaceLabel
-  , runMenuPage
+  , runMenuPageWithAliases
   )
 import NetworkMonitor.Menu.Diagnostics (diagnosticsPage)
 import NetworkMonitor.Menu.Help (helpPage)
+import NetworkMonitor.Menu.HubStatus (hubStatusLines)
 import NetworkMonitor.Menu.LiveMonitor (liveMonitorPage)
 import NetworkMonitor.Menu.MissionReports (missionReportsPage)
 import NetworkMonitor.Menu.RouterPage (routerPage)
@@ -18,20 +19,35 @@ import NetworkMonitor.Menu.Settings (settingsPage)
 import NetworkMonitor.Session (Session (..), loadSession)
 import System.Exit (exitSuccess)
 
+hubAliases :: [(String, String)]
+hubAliases =
+  [ ("l", "1")
+  , ("c", "2")
+  , ("d", "3")
+  , ("r", "4")
+  , ("m", "5")
+  , ("s", "6")
+  , ("?", "7")
+  , ("h", "7")
+  ]
+
 runMainMenu :: IO ()
 runMainMenu = do
   session <- loadSession
   loop session
   where
     loop session = do
+      status <- hubStatusLines session
       session' <-
-        runMenuPage
+        runMenuPageWithAliases
           "NT SENTINEL"
+          []
           session
-          (mainSummary session)
+          (mainSummary session ++ status)
           mainMenuLines
           FooterExit
           Nothing
+          hubAliases
       if session' == session
         then goodbye
         else loop session'
@@ -44,14 +60,14 @@ runMainMenu = do
 
 mainMenuLines :: [MenuLine]
 mainMenuLines =
-  [ MenuOpt "Live Monitor" liveMonitorPage
-  , MenuOpt "Connections & Flow" connectionsPage
-  , MenuOpt "Diagnostics" diagnosticsPage
-  , MenuOpt "Router & WAN" routerPage
-  , MenuOpt "Mission & Reports" missionReportsPage
+  [ MenuOpt "Live Monitor  (L)" liveMonitorPage
+  , MenuOpt "Connections & Flow  (C)" connectionsPage
+  , MenuOpt "Diagnostics  (D)" diagnosticsPage
+  , MenuOpt "Router & WAN  (R)" routerPage
+  , MenuOpt "Mission & Reports  (M)" missionReportsPage
   , MenuSection "System"
-  , MenuOpt "Settings" settingsPage
-  , MenuOpt "Help" helpPage
+  , MenuOpt "Settings  (S)" settingsPage
+  , MenuOpt "Help  (?)" helpPage
   ]
 
 mainSummary :: Session -> [String]
@@ -60,7 +76,6 @@ mainSummary session =
   , "  Config: " ++ configPathHint
   , "  Interface : " ++ ifaceLabel (sessionInterface session)
   , "  Interval  : " ++ show (sessionInterval session) ++ " sec"
-  , "  State     : " ++ sessionState session
-  , "  Limit     : " ++ show (sessionLimit session)
+  , "  Theme     : " ++ sessionTheme session
   , ""
   ]

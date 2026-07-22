@@ -13,6 +13,7 @@ missionReportsPage :: Session -> IO Session
 missionReportsPage session =
   runMenuPage
     "MISSION & REPORTS"
+    ["Main", "Mission & Reports"]
     session
     pageSummary
     pageLines

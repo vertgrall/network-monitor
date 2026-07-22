@@ -3,6 +3,8 @@ module NetworkMonitor.Menu.Diagnostics (diagnosticsPage) where
 import NetworkMonitor.CLI (Command (MultiPing))
 import NetworkMonitor.Menu.Actions as Act
   ( runDnsPrompt
+  , runHealthOnce
+  , runLanMapOnce
   , runLiveAction
   , runPingPrompt
   , runPortPrompt
@@ -19,6 +21,7 @@ diagnosticsPage :: Session -> IO Session
 diagnosticsPage session =
   runMenuPage
     "DIAGNOSTICS"
+    ["Main", "Diagnostics"]
     session
     pageSummary
     pageLines
@@ -34,6 +37,9 @@ pageLines =
   , MenuOpt "DNS trace" Act.runDnsPrompt
   , MenuOpt "Multi-ping board (live)" $ \s ->
       Act.runLiveAction s MultiPing "Multi-ping stopped."
+  , MenuSection "Network health"
+  , MenuOpt "Health score (snapshot)" Act.runHealthOnce
+  , MenuOpt "LAN device map" Act.runLanMapOnce
   ]
 
 pageSummary :: [String]
