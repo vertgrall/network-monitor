@@ -29,6 +29,11 @@ data Session = Session
   , sessionBlocklist :: ![String]
   , sessionEmitAlert :: !Double
   , sessionLogging :: !Bool
+  , sessionRouterHost :: !String
+  , sessionSnmpCommunity :: !String
+  , sessionSnmpWanIf :: !String
+  , sessionFlowResolveDns :: !Bool
+  , sessionFlowShowApps :: !Bool
   }
   deriving (Eq, Show)
 
@@ -44,6 +49,11 @@ defaultSession =
     , sessionBlocklist = []
     , sessionEmitAlert = 524288
     , sessionLogging = True
+    , sessionRouterHost = ""
+    , sessionSnmpCommunity = "public"
+    , sessionSnmpWanIf = ""
+    , sessionFlowResolveDns = True
+    , sessionFlowShowApps = True
     }
 
 sessionConfigPath :: IO FilePath
@@ -83,6 +93,11 @@ saveSession s = do
     , "blocklist=" ++ showCommaList (sessionBlocklist s)
     , "emit_alert=" ++ show (sessionEmitAlert s)
     , "logging=" ++ if sessionLogging s then "1" else "0"
+    , "router_host=" ++ sessionRouterHost s
+    , "snmp_community=" ++ sessionSnmpCommunity s
+    , "snmp_wan_if=" ++ sessionSnmpWanIf s
+    , "flow_resolve_dns=" ++ if sessionFlowResolveDns s then "1" else "0"
+    , "flow_show_apps=" ++ if sessionFlowShowApps s then "1" else "0"
     ]
   hClose h
 
@@ -128,6 +143,11 @@ parseConfig content =
                     "blocklist" -> s {sessionBlocklist = parseCommaList v}
                     "emit_alert" -> s {sessionEmitAlert = readField v (sessionEmitAlert s)}
                     "logging" -> s {sessionLogging = v == "1" || v == "true" || v == "yes"}
+                    "router_host" -> s {sessionRouterHost = v}
+                    "snmp_community" -> s {sessionSnmpCommunity = if null v then sessionSnmpCommunity s else v}
+                    "snmp_wan_if" -> s {sessionSnmpWanIf = v}
+                    "flow_resolve_dns" -> s {sessionFlowResolveDns = v == "1" || v == "true" || v == "yes"}
+                    "flow_show_apps" -> s {sessionFlowShowApps = v == "1" || v == "true" || v == "yes"}
                     _ -> s
             _ -> s
 

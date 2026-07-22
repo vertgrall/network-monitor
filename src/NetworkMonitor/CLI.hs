@@ -20,6 +20,8 @@ module NetworkMonitor.CLI
   , runIntel
   , runReport
   , runMultiPing
+  , runRouter
+  , runInbound
   ) where
 
 import Control.Concurrent (threadDelay)
@@ -41,6 +43,7 @@ import NetworkMonitor.Flow
   , renderFlowExtras
   , renderFlowPanel
   )
+import qualified NetworkMonitor.Flow as FlowLib
 import NetworkMonitor.Format
 import NetworkMonitor.Hosts (topRemoteHosts)
 import NetworkMonitor.Intel (gatherIntel, renderIntelLines)
@@ -50,6 +53,14 @@ import NetworkMonitor.Mission (renderMissionPanel)
 import NetworkMonitor.NetView (gatherNetSnapshot, maxRate, renderNetViewLines, snapInterfaces, updatePingHistory)
 import NetworkMonitor.Probe
 import NetworkMonitor.Report (writeSessionReport)
+import NetworkMonitor.Router
+  ( WanIface (..)
+  , discoverWanInterface
+  , readWanOctets
+  , renderRouterPanel
+  , snmpAvailable
+  , wanRates
+  )
 import NetworkMonitor.Stats
 import NetworkMonitor.Trace (traceRoute)
 import Options.Applicative
@@ -71,6 +82,8 @@ data Command
   | Intel
   | Report
   | MultiPing
+  | Router
+  | Inbound
   | Ping
   | TopHosts
   | PortCheck
@@ -91,6 +104,11 @@ data Options = Options
   , optBlocklist :: ![String]
   , optEmitAlert :: !Double
   , optLogging :: !Bool
+  , optRouterHost :: !String
+  , optSnmpCommunity :: !String
+  , optSnmpWanIf :: !String
+  , optFlowResolveDns :: !Bool
+  , optFlowShowApps :: !Bool
   }
   deriving (Eq, Show)
 
@@ -121,6 +139,11 @@ options =
     <*> blocklistOption
     <*> emitAlertOption
     <*> loggingOption
+    <*> routerHostOption
+    <*> snmpCommunityOption
+    <*> snmpWanIfOption
+    <*> pure True
+    <*> pure True
 
 commandParser :: Parser Command
 commandParser =
@@ -185,6 +208,15 @@ commandParser =
         <> command
           "mping"
           ( info (pure MultiPing) (progDesc "Multi-target ping board"))
+        <> command
+          "router"
+          ( info (pure Router) (progDesc "Live WAN traffic through your router (SNMP)"))
+        <> command
+          "wan"
+          ( info (pure Router) (progDesc "Alias for router"))
+        <> command
+          "inbound"
+          ( info (pure Inbound) (progDesc "Remote hosts connected to your listening ports"))
         <> command
           "ping"
           ( info (pure Ping) (progDesc "Ping a host and show latency stats"))
@@ -330,6 +362,36 @@ loggingOption =
         <> help "Append session events to ~/.config/new-tower/sessions.log"
     )
 
+routerHostOption :: Parser String
+routerHostOption =
+  strOption
+    ( long "router"
+        <> metavar "HOST"
+        <> value ""
+        <> showDefault
+        <> help "Router IP for SNMP WAN monitor (default: auto-detect gateway)"
+    )
+
+snmpCommunityOption :: Parser String
+snmpCommunityOption =
+  strOption
+    ( long "snmp-community"
+        <> metavar "COMMUNITY"
+        <> value "public"
+        <> showDefault
+        <> help "SNMP v2c community string for router polling"
+    )
+
+snmpWanIfOption :: Parser String
+snmpWanIfOption =
+  strOption
+    ( long "snmp-wan-if"
+        <> metavar "NAME"
+        <> value ""
+        <> showDefault
+        <> help "WAN interface name hint (e.g. wan, ppp0, eth0)"
+    )
+
 runCommand :: Options -> IO ()
 runCommand opts =
   case optCommand opts of
@@ -348,6 +410,8 @@ runCommand opts =
     Intel -> runIntel opts
     Report -> runReport opts
     MultiPing -> runMultiPing opts
+    Router -> runRouter opts
+    Inbound -> runInbound opts
     Ping -> runPing opts
     TopHosts -> runTopHosts opts
     PortCheck -> runPortCheck opts
@@ -533,12 +597,18 @@ runFlow opts =
           blocked = blockedHosts (optBlocklist opts) flows
           alerts =
             renderAlertLines colorOn newFlows blocked (suspiciousFlows flows)
-          apps = renderAppLines n colorOn (computeAppEmits emits)
+          apps =
+            if optFlowShowApps opts
+              then renderAppLines n colorOn (computeAppEmits emits)
+              else []
           totalEmit = sum (map emitTxRate emits)
           inStorm =
             thresholdExceeded (optEmitAlert opts) flows totalEmit
               || detectTrafficStorm totalEmit (maximum (1 : map emitTxRate emits))
-      dnsLines <- mapM enrichDns (take 5 emits)
+      dnsLines <-
+        if optFlowResolveDns opts
+          then mapM enrichDns (take 5 emits)
+          else pure []
       let body =
             renderFlowPanel n colorOn (optInterval opts) emits flows
               ++ renderFlowExtras alerts apps dnsLines
@@ -900,6 +970,131 @@ runMultiPing opts =
               ++ padL 8 (show (round (pingAvgMs r)) ++ " ms")
               ++ padL 8 (show (round (pingLossPct r)) ++ "% loss")
           Left err -> "  " ++ padR 20 host ++ "  " ++ take 40 err
+
+runRouter :: Options -> IO ()
+runRouter opts = do
+  ok <- snmpAvailable
+  if not ok
+    then do
+      renderMessage "  SNMP tools not found. Install net-snmp (snmpget/snmpwalk)."
+      renderMessage "  On macOS: brew install net-snmp"
+    else do
+      host <- resolveRouterHost opts
+      case host of
+        Nothing -> renderMessage "  Could not determine router IP. Set router_host in session.conf or use --router."
+        Just routerIp -> do
+          let community = optSnmpCommunity opts
+              hint =
+                if null (optSnmpWanIf opts)
+                  then Nothing
+                  else Just (optSnmpWanIf opts)
+          wanResult <- discoverWanInterface routerIp community hint
+          case wanResult of
+            Left err -> renderMessage ("  " ++ err)
+            Right wan ->
+              bracketTerminal $ do
+                baseline <- readWanOctets routerIp community wan
+                loop baseline 0 0 0
+              where
+                loop prev n peakDown peakUp = do
+                  threadDelay (round (optInterval opts * 1000000))
+                  colorOn <- useColor
+                  current <- readWanOctets routerIp community wan
+                  let (down, up) = wanRates prev current (optInterval opts)
+                      peakDown' = maximum (peakDown : [down, 0])
+                      peakUp' = maximum (peakUp : [up, 0])
+                      (totalIn, totalOut) =
+                        case current of
+                          Just (i, o) -> (i, o)
+                          Nothing -> (0, 0)
+                      body =
+                        renderRouterPanel
+                          n
+                          colorOn
+                          routerIp
+                          wan
+                          down
+                          up
+                          totalIn
+                          totalOut
+                          peakDown'
+                          peakUp'
+                  clearScreen
+                  renderHeaderAnimated n
+                  renderLiveBanner n (optInterval opts) (n + 1) False
+                  renderPanel "ROUTER WAN TRAFFIC (SNMP)" body
+                  when (optLogging opts) $
+                    appendSessionLog
+                      ( "router wan in="
+                          ++ show (round down)
+                          ++ "B/s out="
+                          ++ show (round up)
+                          ++ "B/s"
+                      )
+                  when (optCount opts > 0 && n + 1 >= optCount opts) exitSuccess
+                  loop current (n + 1) peakDown' peakUp'
+
+resolveRouterHost :: Options -> IO (Maybe String)
+resolveRouterHost opts =
+  if not (null (optRouterHost opts))
+    then pure (Just (optRouterHost opts))
+    else defaultGateway
+
+runInbound :: Options -> IO ()
+runInbound opts = do
+  flows <- FlowLib.readFlows
+  let inbound =
+        take (optLimit opts) $
+          filter isInboundFlow $
+            filter ((== optState opts) . FlowLib.flowState) flows
+  clearScreen
+  renderHeader
+  rows <- mapM (renderInboundRow opts) inbound
+  let body =
+        [ ""
+        , "  Remote hosts with connections TO your machine (inbound):"
+        , ""
+        , "  "
+            ++ padR 18 "REMOTE"
+            ++ padR 22 "HOSTNAME"
+            ++ padL 6 "PORT"
+            ++ padR 14 "LOCAL"
+            ++ padR 12 "PROCESS"
+        ]
+          ++ if null rows
+            then ["  (no inbound " ++ optState opts ++ " connections detected)"]
+            else rows
+          ++ [""]
+  renderPanel "INBOUND WATCHERS" body
+  putStrLn $
+    "Showing "
+      ++ show (length inbound)
+      ++ " inbound "
+      ++ optState opts
+      ++ " connection(s)."
+
+isInboundFlow :: FlowLib.Flow -> Bool
+isInboundFlow f =
+  FlowLib.flowPort f >= 1024
+    && ( FlowLib.flowLocalPort f <= 1024
+           || FlowLib.flowLocalPort f `elem` commonLocalServicePorts
+       )
+  where
+    commonLocalServicePorts = [3000, 3001, 4000, 5000, 5173, 5432, 5900, 6379, 8000, 8080, 8443, 8888]
+
+renderInboundRow :: Options -> FlowLib.Flow -> IO String
+renderInboundRow opts f = do
+  hostLabel <-
+    if optFlowResolveDns opts
+      then lookupHostLabel (FlowLib.flowHost f)
+      else pure (FlowLib.flowHost f)
+  pure $
+    "  "
+      ++ padR 18 (FlowLib.flowHost f)
+      ++ padR 22 (take 22 hostLabel)
+      ++ padL 6 (show (FlowLib.flowPort f))
+      ++ padR 14 (":" ++ show (FlowLib.flowLocalPort f))
+      ++ padR 12 (take 12 (maybe "?" id (FlowLib.flowProcess f)))
 
 filterByInterface :: Options -> [InterfaceStats] -> [InterfaceStats]
 filterByInterface opts stats =

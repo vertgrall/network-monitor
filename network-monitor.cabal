@@ -24,10 +24,21 @@ executable network-monitor
                       NetworkMonitor.Listen
                       NetworkMonitor.Log
                       NetworkMonitor.Menu
+                      NetworkMonitor.Menu.Actions
+                      NetworkMonitor.Menu.Connections
+                      NetworkMonitor.Menu.Core
+                      NetworkMonitor.Menu.Diagnostics
+                      NetworkMonitor.Menu.Help
+                      NetworkMonitor.Menu.LiveMonitor
+                      NetworkMonitor.Menu.MainPage
+                      NetworkMonitor.Menu.MissionReports
+                      NetworkMonitor.Menu.RouterPage
+                      NetworkMonitor.Menu.Settings
                       NetworkMonitor.Mission
                       NetworkMonitor.NetView
                       NetworkMonitor.Probe
                       NetworkMonitor.Report
+                      NetworkMonitor.Router
                       NetworkMonitor.Services
                       NetworkMonitor.Session
                       NetworkMonitor.Stats
