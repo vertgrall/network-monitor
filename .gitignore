@@ -1,0 +1,17 @@
+dist-newstyle/
+dist/
+.stack-work/
+*.hi
+*.o
+*.dyn_hi
+*.dyn_o
+.hpc
+.hsenv
+.cabal-sandbox/
+cabal.sandbox.config
+*.prof
+*.aux
+*.hp
+*.eventlog
+.DS_Store
+.venv-docs/

@@ -1,0 +1,44 @@
+cabal-version:      3.0
+name:               network-monitor
+version:            0.1.0.0
+synopsis:           Command-line network monitoring tool
+description:        Monitor interface traffic, bandwidth, and TCP connections from the terminal.
+license:            MIT
+author:             Jon McMillion
+maintainer:         jon@example.com
+build-type:         Simple
+
+executable network-monitor
+  main-is:            Main.hs
+  hs-source-dirs:     src
+  other-modules:      NetworkMonitor.Alert
+                      NetworkMonitor.Animate
+                      NetworkMonitor.Apps
+                      NetworkMonitor.Art
+                      NetworkMonitor.CLI
+                      NetworkMonitor.DNS
+                      NetworkMonitor.Flow
+                      NetworkMonitor.Format
+                      NetworkMonitor.Hosts
+                      NetworkMonitor.Intel
+                      NetworkMonitor.Listen
+                      NetworkMonitor.Log
+                      NetworkMonitor.Menu
+                      NetworkMonitor.Mission
+                      NetworkMonitor.NetView
+                      NetworkMonitor.Probe
+                      NetworkMonitor.Report
+                      NetworkMonitor.Services
+                      NetworkMonitor.Session
+                      NetworkMonitor.Stats
+                      NetworkMonitor.Trace
+  ghc-options:        -Wall
+  build-depends:
+      base >=4.18 && <5
+    , containers
+    , directory
+    , optparse-applicative >=0.18 && <0.20
+    , process
+    , text
+    , time
+  default-language:   Haskell2010
